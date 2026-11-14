@@ -1,6 +1,5 @@
 <p align="center">
-  Reuse buffers instead of allocating new ones, with a compile-time DSL<br>
-  and zero runtime cost. Generic and framework agnostic.
+  Reuse buffers instead of allocating new ones via a compile-time DSL
 </p>
 
 <p align="center">
