@@ -18,7 +18,7 @@
 - **Two buffer styles**: `StaticBuffer` lives on the stack with a fixed capacity. `PooledBuffer` keeps a growable backing store that grows once, then stays flat.
 - **Scoped borrow API**: `withBorrow(pool, buf): ...` gives you a short-lived handle. `reuse(buf): ...` clears an existing buffer for another pass.
 - **Pragma sugar**: mark a local variable with `{.buffalo.}` inside `buffaloScope` to get stack scratch that is cleared for you, without paying for a full zero-fill on POD static buffers.
-- **Safety checks at compile time**: the borrowed name cannot be returned, assigned to `result`, or captured by a nested routine. If you need the data outside the scope, copy it out explicitly.
+- **Safety checks at compile time**: the borrowed name cannot escape the scope (no `return`/`result`, no storing in another variable, no `addr`/`unsafeAddr`, no nested-routine capture). Safe uses stay allowed: `buf.len`/`buf.cap`/`buf[i]`, passing views as call arguments, and explicit copy-out with `toSeq`/`toString`.
 - **Works with common data**: zero-copy views and bulk helpers for `seq`, `string`, arrays, raw pointers, and `std/memfiles`.
 
 ## Examples
