@@ -209,3 +209,22 @@ suite "buffaloScope nesting":
         scratch.add(5)
         n = scratch.len
       check n == 1
+
+suite "withBorrows checks":
+  test "odd arg count rejected":
+    mustFail("borrows_odd",
+      "import buffalo\n" &
+      "var pool = initPool(byte, 8)\n" &
+      "withBorrows(pool):\n" &
+      "  echo 1\n")
+
+  test "escape through one name rejected":
+    mustFail("borrows_escape",
+      "import buffalo\n" &
+      "var pa = initPool(byte, 8)\n" &
+      "var pb = initPool(byte, 8)\n" &
+      "withBorrows(pa, a, pb, b):\n" &
+      "  a.add(1)\n" &
+      "  b.add(2)\n" &
+      "  var leaked = b\n" &
+      "  echo leaked.len\n")

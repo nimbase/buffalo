@@ -392,6 +392,36 @@ macro withBorrow*(pool: var auto, bufName: untyped, body: untyped): untyped =
       `body`
 
 # ---------------------------------------------------------------------------
+# withBorrows(poolA, a, poolB, b, ..., body)
+# ---------------------------------------------------------------------------
+
+macro withBorrows*(args: varargs[untyped]): untyped =
+  ## Borrow several pools at once: `withBorrows(poolA, a, poolB, b): ...`.
+  ## Arguments alternate pool (same plain-variable rule as `withBorrow`)
+  ## and borrow name (plain identifier), followed by the `:` body. Expands
+  ## to nested `withBorrow` scopes, so every pool is cleared, every name
+  ## gets the same compile-time alias, and every name gets the same escape
+  ## checks — one block instead of N nested ones.
+  ## (Takes a single `varargs` because a trailing `body` parameter would
+  ## swallow the `:` block into the varargs; the last element is the body.)
+  if args.len < 3 or args.len mod 2 != 1:
+    error("buffalo: 'withBorrows' needs pool,name pairs plus a body, e.g. " &
+      "withBorrows(poolA, a, poolB, b): ...", args)
+  let body = args[args.len - 1]
+  if body.kind != nnkStmtList:
+    error("buffalo: withBorrows needs a body block", body)
+  for i in countup(1, args.len - 2, 2):
+    if args[i].kind notin {nnkIdent, nnkSym}:
+      error("buffalo: borrow name must be a plain identifier", args[i])
+  result = body
+  var i = args.len - 3
+  while i >= 0:
+    let pool = args[i]
+    let bname = args[i + 1]
+    result = newCall(bindSym"withBorrow", pool, bname, result)
+    dec(i, 2)
+
+# ---------------------------------------------------------------------------
 # buffaloScope(body) + {.buffalo.} pragma
 # ---------------------------------------------------------------------------
 

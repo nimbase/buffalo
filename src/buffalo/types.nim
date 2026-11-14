@@ -157,6 +157,32 @@ proc pop*[T](b: var PooledBuffer[T]): T {.inline.} =
   result = move(b.data[b.len])
 
 # ---------------------------------------------------------------------------
+# Length guarantee without fill (hot-loop refill pattern)
+# ---------------------------------------------------------------------------
+
+proc ensureLen*[T; Cap: static int](b: var StaticBuffer[T, Cap], n: int
+) {.inline.} =
+  ## Ensure `len >= n`, growing `len` only (fixed storage cannot grow, so
+  ## `n` must fit `Cap`). Unlike `setLen`, the newly exposed range is NOT
+  ## zero-filled: the caller must overwrite `[oldLen, n)` before reading it
+  ## (e.g. an explicit `zeroMem`, a full `copyFrom`, or per-element fill).
+  ## Trusts the caller like `addUnchecked`; raises when `n` is out of range.
+  if n < 0 or n > Cap:
+    raise newException(RangeDefect, "StaticBuffer ensureLen out of range")
+  if b.len < n:
+    b.len = n
+
+proc ensureLen*[T](b: var PooledBuffer[T], n: int) {.inline.} =
+  ## Ensure `len >= n`, growing the backing geometrically when short
+  ## (honours `maxCap`, may raise). Newly exposed elements are NOT
+  ## zero-filled: overwrite before reading.
+  if n < 0:
+    raise newException(RangeDefect, "PooledBuffer ensureLen out of range")
+  b.ensureCap(n)
+  if b.len < n:
+    b.len = n
+
+# ---------------------------------------------------------------------------
 # Capacity management (reserve ahead, release after spikes)
 # ---------------------------------------------------------------------------
 

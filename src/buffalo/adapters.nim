@@ -205,6 +205,24 @@ proc appendMany*(b: var PooledBuffer[byte], src: string) {.inline.} =
   b.len += src.len
 
 # ---------------------------------------------------------------------------
+# Bounds-checked blit (replaces per-byte copy loops)
+# ---------------------------------------------------------------------------
+
+proc blit*[T](dst: var openArray[T], src: openArray[T]) {.inline.} =
+  ## Copy `src` into `dst[0 ..< src.len]`, replacing `for i, v in src:
+  ## dst[i] = v` loops. Raises `RangeDefect` when `src` does not fit.
+  ## Bulk path uses `copyMem` for memcpy-able types, element-wise `=copy`
+  ## otherwise (same policy as `copyFrom` / `appendMany`).
+  if src.len > dst.len:
+    raise newException(RangeDefect, "buffalo blit: src exceeds dst")
+  when supportsCopyMem(T):
+    if src.len > 0:
+      copyMem(addr dst[0], unsafeAddr src[0], src.len * sizeof(T))
+  else:
+    for i in 0 ..< src.len:
+      dst[i] = src[i]
+
+# ---------------------------------------------------------------------------
 # memfiles adapters
 # ---------------------------------------------------------------------------
 

@@ -528,3 +528,89 @@ suite "memfiles writable":
         mf.close()
     finally:
       removeFile(path)
+
+suite "ensureLen without fill":
+  test "pooled grows backing, keeps content":
+    var p = initPool(byte, 4)
+    p.copyFrom([1'u8, 2])
+    p.ensureLen(10)
+    check p.len == 10
+    check p.cap >= 10
+    check p[0] == 1 and p[1] == 2
+    # steady state: no regrowth
+    let cap = p.cap
+    for _ in 0 ..< 50:
+      p.clear()
+      p.ensureLen(10)
+    check p.cap == cap
+    expect RangeDefect:
+      p.ensureLen(-1)
+
+  test "static checks capacity, keeps content":
+    var sb {.noinit.}: StaticBuffer[byte, 8]
+    sb.len = 0
+    sb.appendMany([7'u8, 8])
+    sb.ensureLen(5)
+    check sb.len == 5
+    check sb[0] == 7 and sb[1] == 8
+    expect RangeDefect:
+      sb.ensureLen(9)
+    expect RangeDefect:
+      sb.ensureLen(-1)
+
+suite "withBorrows multi-pool":
+  test "clears all pools and aliases all names":
+    var pa = initPool(byte, 8)
+    var pb = initPool(byte, 8)
+    for round in 0 ..< 5:
+      withBorrows(pa, a, pb, b):
+        check a.len == 0
+        check b.len == 0
+        a.copyFrom([byte(round)])
+        b.copyFrom([byte(round + 10)])
+        check a.len == 1
+        check b.len == 1
+      check pa.len == 1
+      check pb.len == 1
+    # values survive between borrows; a fresh borrow clears again
+    check pa.toSeq() == @[4'u8]
+    check pb.toSeq() == @[14'u8]
+    withBorrows(pa, a, pb, b):
+      check a.len == 0
+      check b.len == 0
+
+  test "three pools in one block":
+    var p1 = initPool(byte, 4)
+    var p2 = initPool(byte, 4)
+    var p3 = initPool(byte, 4)
+    withBorrows(p1, a, p2, b, p3, c):
+      a.copyFrom("x")
+      b.copyFrom("yy")
+      c.copyFrom("zzz")
+    check p1.toString() == "x"
+    check p2.toString() == "yy"
+    check p3.toString() == "zzz"
+
+  test "generic call args allowed, header alias bound by withBorrow rules":
+    var pa = initPool(byte, 8)
+    var total = 0
+    withBorrows(pa, a):
+      a.copyFrom([1'u8, 2, 3])
+      total = sumBytes(a.toOpenArray())
+    check total == 6
+
+suite "blit bulk copy":
+  test "copies seq into array and pool backing":
+    var dstArr: array[6, byte]
+    blit(dstArr, [1'u8, 2, 3])
+    check dstArr[0 ..< 3] == [1'u8, 2, 3]
+    var p = initPool(byte, 8)
+    p.setLen(6)
+    blit(p.data.toOpenArray(2, 5), [9'u8, 8, 7, 6])
+    check p.data[2 ..< 6] == @[9'u8, 8, 7, 6]
+    expect RangeDefect:
+      blit(dstArr.toOpenArray(0, 1), [1'u8, 2, 3])
+    # empty blit is a no-op
+    var empty: array[2, byte] = [0, 0]
+    blit(empty, newSeq[byte]())
+    check empty == [0'u8, 0]
