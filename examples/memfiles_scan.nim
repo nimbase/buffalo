@@ -10,7 +10,7 @@
 ##   no mapping at all. RSS ~= 10 MiB. Minimal.
 ## All three checksums must agree. maxrss is sampled after each phase.
 
-import std/[memfiles, monotimes, times, os, posix, streams]
+import std/[memfiles, monotimes, times, os, posix]
 import buffalo
 
 const FileSize = 200 * 1024 * 1024
@@ -37,7 +37,7 @@ if not fileExists(path):
     var piece = newString(1024 * 1024)
     for i in 0 ..< piece.len:
       piece[i] = char(i and 0xFF)
-    var s = newFileStream(path, fmWrite)
+    var s = syncio.open(path, fmWrite)
     for _ in 0 ..< FileSize div piece.len:
       s.write(piece)
     s.close()
@@ -50,20 +50,21 @@ try:
   # must run before anything maps the file.
   # No mapping: stream 10 MiB reads into one reused stack buffer.
   # Manual `{.noinit.}` instead of `buffaloScope` here: filling via
-  # `readData` needs `addr` for the read call, which the DSL deliberately
+  # `readBuffer` needs `addr` for the read call, which the DSL deliberately
   # forbids. The pointer never leaves the loop iteration.
   let t2 = getMonoTime()
   var scratch {.noinit.}: StaticBuffer[byte, Chunk]
   scratch.len = 0
+  var f = syncio.open(path)
   for _ in 0 ..< Passes:
-    var s = newFileStream(path, fmRead)
+    f.setFilePos(0)
     while true:
-      let n = s.readData(addr scratch.data[0], Chunk)
+      let n = f.readBuffer(addr scratch.data[0], Chunk)
       if n <= 0:
         break
       scratch.len = n # bytes just read are now the used prefix
       sumStreamed += checksum(scratch.toOpenArray())
-    s.close()
+  f.close()
   let msStreamed = inMilliseconds(getMonoTime() - t2)
   rssStreamed = maxRssKb()
 
