@@ -401,3 +401,130 @@ suite "memfiles chunks and ranges":
         mf.close()
     finally:
       removeFile(path)
+
+suite "memfiles writable":
+  test "copyToMemFile whole mapping round-trip":
+    let dir = getTempDir()
+    let path = dir / "buffalo_writeback.bin"
+    writeFile(path, "0123456789")
+    try:
+      var mf = memfiles.open(path, fmReadWrite)
+      try:
+        var sb {.noinit.}: StaticBuffer[byte, 16]
+        sb.len = 0
+        sb.copyFrom("HELLO")
+        let sizeBefore = mf.size
+        sb.copyToMemFile(mf)
+        check mf.size == sizeBefore
+        check sb.len == 5 # write preserves buffer len
+        check sb.toString() == "HELLO"
+        # read back through the same mapping
+        var back {.noinit.}: StaticBuffer[byte, 16]
+        back.len = 0
+        back.copyFromMemFile(mf, 0, 5)
+        check back.toString() == "HELLO"
+        mf.flush()
+      finally:
+        mf.close()
+      # durable on disk after close
+      check readFile(path)[0 ..< 5] == "HELLO"
+    finally:
+      removeFile(path)
+
+  test "copyToMemFile offset and len":
+    let dir = getTempDir()
+    let path = dir / "buffalo_write_range.bin"
+    writeFile(path, "0123456789")
+    try:
+      var mf = memfiles.open(path, fmReadWrite)
+      try:
+        var p = initPool(byte, 8)
+        p.copyFrom("abcd")
+        p.copyToMemFile(mf, 2, 4) # mapping becomes 01abcd6789
+        check p.len == 4
+        check mf.size == 10
+        var back = initPool(byte, 10)
+        back.copyFromMemFile(mf)
+        check back.toString() == "01abcd6789"
+        # zero-len write is a no-op but still range-checked
+        p.copyToMemFile(mf, 10, 0)
+        expect RangeDefect:
+          p.copyToMemFile(mf, 11, 0) # offset past end
+        expect RangeDefect:
+          p.copyToMemFile(mf, 9, 2) # past end of mapping
+        expect RangeDefect:
+          p.copyToMemFile(mf, 0, 5) # len exceeds buffer used prefix
+        expect RangeDefect:
+          p.copyToMemFile(mf, -1, 2)
+        mf.flush()
+      finally:
+        mf.close()
+      check readFile(path) == "01abcd6789"
+    finally:
+      removeFile(path)
+
+  test "copyToSlice writes chunk windows":
+    let dir = getTempDir()
+    let path = dir / "buffalo_write_chunks.bin"
+    writeFile(path, "........")
+    try:
+      var mf = memfiles.open(path, fmReadWrite)
+      try:
+        var pool = initPool(byte, 4)
+        var idx = 0
+        for slice in memChunks(mf, 4):
+          pool.copyFrom(if idx == 0: "AB" else: "CDEF")
+          # first window is 4 wide but we only write 2 bytes of it
+          let n = if idx == 0: 2 else: 4
+          pool.copyToMemFile(mf, idx * 4, n)
+          inc idx
+        mf.flush()
+        var back = initPool(byte, 8)
+        back.copyFromMemFile(mf)
+        check back.toString() == "AB..CDEF"
+        # whole-slice write + overflow
+        for slice in memChunks(mf, 8):
+          var sb {.noinit.}: StaticBuffer[byte, 8]
+          sb.len = 0
+          sb.copyFrom("ZZZZZZZZ")
+          sb.copyToSlice(slice)
+          check sumBytes(sliceView(slice)) == sumBytes(sb.toOpenArray())
+          var big {.noinit.}: StaticBuffer[byte, 16]
+          big.len = 0
+          big.copyFrom("ZZZZZZZZ!")
+          expect RangeDefect:
+            big.copyToSlice(slice)
+        mf.flush()
+      finally:
+        mf.close()
+    finally:
+      removeFile(path)
+
+  test "repeated copyTo does not grow":
+    let dir = getTempDir()
+    let path = dir / "buffalo_write_flat.bin"
+    writeFile(path, "0123456789")
+    try:
+      var mf = memfiles.open(path, fmReadWrite)
+      try:
+        var p = initPool(byte, 10)
+        p.copyFrom("0123456789")
+        let capBefore = p.cap
+        for _ in 0 ..< 100:
+          p.copyToMemFile(mf)
+          p.copyToMemFile(mf, 0, 10)
+          for slice in memChunks(mf, 4):
+            var sb {.noinit.}: StaticBuffer[byte, 4]
+            sb.len = 0
+            sb.copyFromSlice(slice)
+            sb.copyToSlice(slice)
+        check p.cap == capBefore
+        check p.len == 10
+        check mf.size == 10
+        var back = initPool(byte, 10)
+        back.copyFromMemFile(mf)
+        check back.toString() == "0123456789"
+      finally:
+        mf.close()
+    finally:
+      removeFile(path)

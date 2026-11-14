@@ -275,3 +275,81 @@ proc copyFromSlice*[T](b: var PooledBuffer[T], ms: MemSlice) {.inline.} =
   if ms.size > 0:
     copyMem(addr b.data[0], ms.data, ms.size)
   b.len = ms.size
+
+# ---------------------------------------------------------------------------
+# memfiles write-back (buffer -> mapping, never grows either side)
+# ---------------------------------------------------------------------------
+# Ownership: the mapping owns its memory; the buffer is scratch. These
+# procs only `copyMem` the used prefix (`b.len` bytes, or `len` bytes of
+# it) into the mapping. They never touch buffer capacity, buffer `len`,
+# or mapping `size`. The caller flushes (`mf.flush()`) and closes.
+# Open the mapping with write access (e.g. `fmReadWrite`); a read-only
+# mapping will fault on write. Steady-state cost is one bounds check
+# plus the copy itself: repeated calls do not allocate or grow.
+
+proc copyToSlice*[T; Cap: static int](
+    b: StaticBuffer[T, Cap], ms: MemSlice
+) {.inline.} =
+  ## Write the used prefix into a slice (e.g. a `memChunks` window).
+  ## Raises when `b.len` exceeds `ms.size`; buffer `len` is preserved.
+  static:
+    assert T is byte or T is char
+  if b.len > ms.size:
+    raise newException(RangeDefect, "copyToSlice overflow: buffer exceeds slice")
+  if b.len > 0:
+    copyMem(ms.data, unsafeAddr b.data[0], b.len)
+
+proc copyToSlice*[T](b: PooledBuffer[T], ms: MemSlice) {.inline.} =
+  static:
+    assert T is byte or T is char
+  if b.len > ms.size:
+    raise newException(RangeDefect, "copyToSlice overflow: buffer exceeds slice")
+  if b.len > 0:
+    copyMem(ms.data, unsafeAddr b.data[0], b.len)
+
+proc copyToMemFile*[T; Cap: static int](
+    b: StaticBuffer[T, Cap], mf: MemFile
+) {.inline.} =
+  ## Write the used prefix into the whole mapping. Raises when `b.len`
+  ## exceeds `mf.size`; buffer `len` and mapping `size` are preserved.
+  static:
+    assert T is byte or T is char
+  if b.len > mf.size:
+    raise newException(RangeDefect, "copyToMemFile overflow: buffer exceeds mapping")
+  if b.len > 0:
+    copyMem(mf.mem, unsafeAddr b.data[0], b.len)
+
+proc copyToMemFile*[T](b: PooledBuffer[T], mf: MemFile) {.inline.} =
+  static:
+    assert T is byte or T is char
+  if b.len > mf.size:
+    raise newException(RangeDefect, "copyToMemFile overflow: buffer exceeds mapping")
+  if b.len > 0:
+    copyMem(mf.mem, unsafeAddr b.data[0], b.len)
+
+proc copyToMemFile*[T; Cap: static int](
+    b: StaticBuffer[T, Cap], mf: MemFile, offset, len: int
+) {.inline.} =
+  ## Write `len` bytes of the buffer prefix at `offset` in the mapping.
+  ## Bounds-checked on both sides (`len <= b.len`, `offset + len <= mf.size`);
+  ## overflow-safe comparison. Neither side grows.
+  static:
+    assert T is byte or T is char
+  if offset < 0 or len < 0 or offset > mf.size or len > mf.size - offset:
+    raise newException(RangeDefect, "copyToMemFile range out of bounds")
+  if len > b.len:
+    raise newException(RangeDefect, "copyToMemFile range exceeds buffer")
+  if len > 0:
+    copyMem(cast[pointer](cast[int](mf.mem) +% offset), unsafeAddr b.data[0], len)
+
+proc copyToMemFile*[T](
+    b: PooledBuffer[T], mf: MemFile, offset, len: int
+) {.inline.} =
+  static:
+    assert T is byte or T is char
+  if offset < 0 or len < 0 or offset > mf.size or len > mf.size - offset:
+    raise newException(RangeDefect, "copyToMemFile range out of bounds")
+  if len > b.len:
+    raise newException(RangeDefect, "copyToMemFile range exceeds buffer")
+  if len > 0:
+    copyMem(cast[pointer](cast[int](mf.mem) +% offset), unsafeAddr b.data[0], len)

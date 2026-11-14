@@ -109,6 +109,37 @@ finally:
 Need a byte range instead? `buf.copyFromMemFile(mf, offset, len)`
 copies exactly that window, bounds-checked on both ends.
 
+### Writable mappings
+
+Writing mirrors reading and never grows either side: the mapping owns
+its memory, the buffer is scratch. Open with write access, write, then
+`flush()` + `close()` yourself.
+
+```nim
+import std/memfiles
+import buffalo
+
+var mf = memfiles.open(path, fmReadWrite) # existing file, fixed size
+try:
+  var pool = initPool(byte, 1024 * 1024)
+  pool.copyFrom(header)
+  pool.copyToMemFile(mf, 0, pool.len) # patch header in place
+  for slice in memChunks(mf, 1024 * 1024):
+    withBorrow(pool, buf):
+      buf.copyFromSlice(slice)
+      transform(buf.toOpenArray()) # in-place edit of the view...
+      buf.copyToSlice(slice)       # ...or write the buffer back
+  mf.flush() # durable before close
+finally:
+  mf.close()
+```
+
+`copyToMemFile(b, mf)` writes the used prefix over the whole mapping;
+`copyToMemFile(b, mf, offset, len)` writes `len` bytes of the prefix at
+`offset`. Both raise `RangeDefect` when the write would not fit, and
+both preserve buffer `len` and mapping `size`. Repeated calls do not
+allocate or grow: steady-state cost is one bounds check plus the copy.
+
 ## Retain vs Zero
 
 Clearing defaults to `Retain`: reset `len`, keep the bytes. Fastest.
