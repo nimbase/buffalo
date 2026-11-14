@@ -1,5 +1,5 @@
 import unittest
-import std/[os, osproc, strutils]
+import std/[os, osproc, strutils, streams]
 
 import buffalo
 
@@ -14,13 +14,18 @@ var negCounter = 0
 
 proc mustFail(name, code: string) =
   ## Compile `code` in a subprocess; assert it fails with a buffalo error.
+  ## Uses an argv list (no shell), so quoting is correct on every OS.
   inc negCounter
   let path = getTempDir() / ("buffalo_neg_" & name & ".nim")
   writeFile(path, code)
-  let cmd =
-    "nim c --hints:off --path:" & quoteShell(srcDir()) & " " &
-    quoteShell(path) & " 2>&1"
-  let (outp, exitc) = execCmdEx(cmd)
+  let nimExe = findExe("nim")
+  check nimExe.len > 0
+  var p = startProcess(nimExe,
+    args = ["c", "--hints:off", "--path:" & srcDir(), path],
+    options = {poStdErrToStdOut})
+  let outp = p.outputStream.readAll()
+  let exitc = p.waitForExit()
+  p.close()
   check exitc != 0
   check outp.contains("buffalo: '" ) or outp.contains("buffalo: {.")
   if exitc == 0 or not outp.contains("buffalo"):
