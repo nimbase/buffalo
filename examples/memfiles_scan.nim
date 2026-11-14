@@ -32,14 +32,15 @@ proc checksum(o: openArray[byte]): int =
 let path = getTempDir() / "buffalo_scan_demo.bin"
 # Deterministic payload, written in 1 MiB pieces to keep setup memory low
 # regardless of the processing chunk size.
-block:
-  var piece = newString(1024 * 1024)
-  for i in 0 ..< piece.len:
-    piece[i] = char(i and 0xFF)
-  var s = newFileStream(path, fmWrite)
-  for _ in 0 ..< FileSize div piece.len:
-    s.write(piece)
-  s.close()
+if not fileExists(path):
+  block:
+    var piece = newString(1024 * 1024)
+    for i in 0 ..< piece.len:
+      piece[i] = char(i and 0xFF)
+    var s = newFileStream(path, fmWrite)
+    for _ in 0 ..< FileSize div piece.len:
+      s.write(piece)
+    s.close()
 
 var mf = memfiles.open(path, fmRead, mappedSize = -1)
 var rssView, rssChunked, rssStreamed: int64
@@ -94,4 +95,4 @@ try:
     " ms maxrss=", rssChunked, " KB (mapping + 10 MiB pool)"
 finally:
   mf.close()
-  removeFile(path)
+  # removeFile(path)
