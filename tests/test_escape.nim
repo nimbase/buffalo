@@ -8,7 +8,10 @@ proc sumBytes(o: openArray[byte]): int =
     result += x.int
 
 proc srcDir(): string =
-  currentSourcePath().parentDir() / ".." / "src"
+  ## Absolute path to `src/`, forward slashes: Nim accepts `/` on every
+  ## OS, which avoids backslash quoting hazards in `--path:` on Windows.
+  result = currentSourcePath().parentDir().parentDir() / "src"
+  result = result.replace("\\", "/")
 
 var negCounter = 0
 
@@ -20,15 +23,21 @@ proc mustFail(name, code: string) =
   writeFile(path, code)
   let nimExe = findExe("nim")
   check nimExe.len > 0
+  let fileArg = path.replace("\\", "/")
   var p = startProcess(nimExe,
-    args = ["c", "--hints:off", "--path:" & srcDir(), path],
+    args = ["c", "--hints:off", "--colors:off", "--path:" & srcDir(), fileArg],
     options = {poStdErrToStdOut})
-  let outp = p.outputStream.readAll()
+  # Read AFTER exit: on Windows `atEnd` on a live pipe reports EOF while
+  # the child is still running, truncating the capture to the first
+  # bytes. Probe output is a few lines, far below the pipe buffer, so
+  # wait-then-read cannot deadlock here.
   let exitc = p.waitForExit()
+  let outp = p.outputStream.readAll()
   p.close()
   check exitc != 0
   check outp.contains("buffalo: '" ) or outp.contains("buffalo: {.")
   if exitc == 0 or not outp.contains("buffalo"):
+    echo "--- nim: " & nimExe & " exit=" & $exitc & " ---"
     echo "--- unexpected compile output for " & name & " ---"
     echo outp
 
