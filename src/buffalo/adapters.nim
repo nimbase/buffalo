@@ -141,6 +141,8 @@ proc appendMany*[T](b: var PooledBuffer[T], src: openArray[T]) {.inline.} =
 
 # `string` is `openArray[char]`, not `openArray[byte]`: explicit overloads
 # so byte buffers accept string input without a caller-side cast loop.
+# `PooledBuffer[char]` needs none: the generic `openArray[T]` overloads
+# accept strings directly (covered by tests).
 
 proc copyFrom*[Cap: static int](
     b: var StaticBuffer[byte, Cap], src: string
@@ -154,7 +156,20 @@ proc copyFrom*[Cap: static int](
 proc copyFrom*[Cap: static int](
     b: var StaticBuffer[char, Cap], src: string
 ) {.inline.} =
-  b.copyFrom(src.toOpenArray())
+  if src.len > Cap:
+    raise newException(RangeDefect, "StaticBuffer copyFrom overflow")
+  for i in 0 ..< src.len:
+    b.data[i] = src[i]
+  b.len = src.len
+
+proc appendMany*[Cap: static int](
+    b: var StaticBuffer[char, Cap], src: string
+) {.inline.} =
+  if b.len + src.len > Cap:
+    raise newException(RangeDefect, "StaticBuffer append overflow")
+  for i in 0 ..< src.len:
+    b.data[b.len + i] = src[i]
+  b.len += src.len
 
 proc copyFrom*(b: var PooledBuffer[byte], src: string) {.inline.} =
   b.ensureCap(src.len)

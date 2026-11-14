@@ -171,6 +171,141 @@ suite "buffaloScope pragma":
       check plain == 42
       check scratch.len == 1
 
+suite "buffer ops (B)":
+  test "setLen shrink and grow":
+    var sb {.noinit.}: StaticBuffer[byte, 8]
+    sb.len = 0
+    sb.appendMany([1'u8, 2, 3, 4])
+    sb.setLen(2)
+    check sb.len == 2
+    check sb.toSeq() == @[1'u8, 2]
+    sb.setLen(4) # regrow zero-fills, safe on noinit scratch
+    check sb.len == 4
+    check sb[2] == 0
+    check sb[3] == 0
+    expect RangeDefect:
+      sb.setLen(9)
+    expect RangeDefect:
+      sb.setLen(-1)
+    var p = initPool(byte, 4)
+    p.copyFrom([1'u8, 2])
+    p.setLen(6) # grows backing, zero-fills
+    check p.len == 6
+    check p[2] == 0
+    check p.toSeq() == @[1'u8, 2, 0, 0, 0, 0]
+    p.setLen(1)
+    check p.len == 1
+    expect RangeDefect:
+      p.setLen(-1)
+
+  test "pop returns last, empty raises":
+    var sb {.noinit.}: StaticBuffer[byte, 4]
+    sb.len = 0
+    sb.appendMany([5'u8, 6, 7])
+    check sb.pop() == 7
+    check sb.pop() == 6
+    check sb.len == 1
+    expect RangeDefect:
+      var e {.noinit.}: StaticBuffer[byte, 2]
+      e.len = 0
+      discard e.pop()
+    var p = initPool(byte, 4)
+    p.copyFrom([8'u8, 9])
+    check p.pop() == 9
+    check p.len == 1
+    expect RangeDefect:
+      var q = initPool(byte, 2)
+      discard q.pop()
+
+  test "reserve and ensureUnused":
+    var p = initPool(byte, 2)
+    p.reserve(64)
+    check p.cap >= 64
+    check p.len == 0
+    p.ensureUnused(16)
+    check p.cap >= 16
+    var sb {.noinit.}: StaticBuffer[byte, 8]
+    sb.len = 0
+    sb.reserve(8) # check only, no-op within Cap
+    sb.ensureUnused(8)
+    expect RangeDefect:
+      sb.reserve(9)
+    sb.appendMany([1'u8, 2, 3])
+    expect RangeDefect:
+      sb.ensureUnused(6) # 3 + 6 > 8
+    expect RangeDefect:
+      p.reserve(-1)
+    expect RangeDefect:
+      p.ensureUnused(-1)
+
+  test "shrinkToFit releases excess":
+    var p = initPool(byte, 64)
+    p.copyFrom([1'u8, 2, 3])
+    check p.cap == 64
+    p.shrinkToFit()
+    check p.cap == 3
+    check p.toSeq() == @[1'u8, 2, 3]
+    p.clear()
+    p.shrinkToFit()
+    check p.cap == 0
+    var sb {.noinit.}: StaticBuffer[byte, 8]
+    sb.len = 0
+    sb.shrinkToFit() # no-op for fixed storage
+
+  test "maxCap bounds growth":
+    var p = initPool(byte, 4, maxCap = 8)
+    check p.maxCap == 8
+    p.copyFrom([1'u8, 2, 3, 4, 5, 6, 7, 8])
+    check p.len == 8
+    expect RangeDefect:
+      p.add(9)
+    expect RangeDefect:
+      p.copyFrom([1'u8, 2, 3, 4, 5, 6, 7, 8, 9])
+    var q = initPool(byte, 16)
+    q.copyFrom([1'u8, 2, 3, 4])
+    expect RangeDefect:
+      q.setMaxCap(3) # below used length
+    q.setMaxCap(8)
+    check q.maxCap == 8
+    check q.cap == 8 # backing shrunk immediately
+    check q.toSeq() == @[1'u8, 2, 3, 4]
+    q.setMaxCap(0) # remove cap
+    q.appendMany([5'u8, 6, 7, 8, 9, 10])
+    check q.len == 10
+
+  test "shrinkAfterSpike keeps steady working set":
+    var p = initPool(byte, 8)
+    p.copyFrom(newSeq[byte](1024))
+    check p.cap >= 1024
+    p.clear()
+    p.appendMany([1'u8, 2])
+    p.shrinkAfterSpike(16)
+    check p.cap == 16
+    check p.toSeq() == @[1'u8, 2]
+    # steady below len keeps len
+    p.shrinkAfterSpike(0)
+    check p.cap == 2
+
+  test "char buffers accept strings":
+    var csb {.noinit.}: StaticBuffer[char, 8]
+    csb.len = 0
+    csb.copyFrom("hi")
+    check csb.len == 2
+    check csb.toString() == "hi"
+    csb.appendMany("!")
+    check csb.toString() == "hi!"
+    expect RangeDefect:
+      csb.copyFrom("toolong!!")
+    # PooledBuffer[char] via the generic openArray overloads
+    var p = initPool(char, 4)
+    p.copyFrom("ab")
+    check p.toString() == "ab"
+    p.appendMany("cd")
+    check p.toString() == "abcd"
+    p.setLen(1)
+    check p.toString() == "a"
+    check p.pop() == 'a'
+
 suite "views and memfiles":
   test "toOpenArray is zero-copy view":
     var sb {.noinit.}: StaticBuffer[byte, 8]
