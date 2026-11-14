@@ -1,7 +1,25 @@
 name: test
 on: [push, pull_request]
 jobs:
-  test:
+  test-debug-orc:
     uses: nimbase/setup-nim-action/.github/workflows/test_clue.yml@main
     with:
       nim-version: stable
+
+  test-release-orc:
+    uses: nimbase/setup-nim-action/.github/workflows/test_clue.yml@main
+    with:
+      nim-version: stable
+      test-flags: '-d:release'
+
+  test-debug-arc:
+    uses: nimbase/setup-nim-action/.github/workflows/test_clue.yml@main
+    with:
+      nim-version: stable
+      test-flags: '--mm:arc'
+
+  test-release-arc:
+    uses: nimbase/setup-nim-action/.github/workflows/test_clue.yml@main
+    with:
+      nim-version: stable
+      test-flags: '-d:release --mm:arc'

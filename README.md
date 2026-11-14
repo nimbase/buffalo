@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://nimbase.github.io/buffalo/">API reference</a><br>
+  <a href="https://nimbase.github.io/buffalo/">API reference</a> · <a href="GUIDE.md">Guide</a><br>
   <img src="https://github.com/nimbase/buffalo/workflows/test/badge.svg" alt="Github Actions">  <img src="https://github.com/nimbase/buffalo/workflows/docs/badge.svg" alt="Github Actions">
 </p>
 
