@@ -1,18 +1,27 @@
-## Zero-copy scan of a memory-mapped file.
+## Minimal-RSS scan of a memory-mapped file.
 ##
 ## Run: `clue build examples/memfiles_scan.nim --release --out:/tmp/scan`
 ##
-## Shows: `memView` scans the mapping in place (no copy, flat RSS), while
-## `copyFromMemFile` pulls the bytes into a reusable pool exactly once.
+## Shows three ways to checksum a 200 MiB file and what each costs in RSS:
+## - `memView`: zero-copy view over the mapping. RSS ~= the mapping itself.
+## - chunked pool: stride the mapping in 10 MiB windows through one reused
+##   pool. RSS ~= mapping + 10 MiB, no 2x copy.
+## - streamed: plain `FileStream` reads into one reused `StaticBuffer`,
+##   no mapping at all. RSS ~= 10 MiB. Minimal.
+## All three checksums must agree. maxrss is sampled after each phase.
 
-import std/[memfiles, monotimes, times, os, posix]
+import std/[memfiles, monotimes, times, os, posix, streams]
 import buffalo
+
+const FileSize = 200 * 1024 * 1024
+const Passes = 5
+const Chunk = 10 * 1024 * 1024
 
 proc maxRssKb(): int64 =
   var ru: Rusage
   discard getrusage(RUSAGE_SELF, addr ru)
   when defined(macosx):
-    ru.ru_maxrss div 1024
+    ru.ru_maxrss div 1024 # macOS reports bytes, Linux reports KB
   else:
     ru.ru_maxrss
 
@@ -21,42 +30,68 @@ proc checksum(o: openArray[byte]): int =
     result += b.int
 
 let path = getTempDir() / "buffalo_scan_demo.bin"
-# Deterministic 1 MiB payload so the demo is self-contained.
+# Deterministic payload, written in 1 MiB pieces to keep setup memory low
+# regardless of the processing chunk size.
 block:
-  var content = newString(1024 * 1024)
-  for i in 0 ..< content.len:
-    content[i] = char(i and 0xFF)
-  writeFile(path, content)
+  var piece = newString(1024 * 1024)
+  for i in 0 ..< piece.len:
+    piece[i] = char(i and 0xFF)
+  var s = newFileStream(path, fmWrite)
+  for _ in 0 ..< FileSize div piece.len:
+    s.write(piece)
+  s.close()
 
 var mf = memfiles.open(path, fmRead, mappedSize = -1)
+var rssView, rssChunked, rssStreamed: int64
+var sumView, sumChunked, sumStreamed: int
 try:
-  GC_fullCollect()
-  let heapBefore = getOccupiedMem()
+  # Streamed first: maxrss is a high-water mark, so the minimal path
+  # must run before anything maps the file.
+  # No mapping: stream 10 MiB reads into one reused stack buffer.
+  # Manual `{.noinit.}` instead of `buffaloScope` here: filling via
+  # `readData` needs `addr` for the read call, which the DSL deliberately
+  # forbids. The pointer never leaves the loop iteration.
+  let t2 = getMonoTime()
+  var scratch {.noinit.}: StaticBuffer[byte, Chunk]
+  scratch.len = 0
+  for _ in 0 ..< Passes:
+    var s = newFileStream(path, fmRead)
+    while true:
+      let n = s.readData(addr scratch.data[0], Chunk)
+      if n <= 0:
+        break
+      scratch.len = n # bytes just read are now the used prefix
+      sumStreamed += checksum(scratch.toOpenArray())
+    s.close()
+  let msStreamed = inMilliseconds(getMonoTime() - t2)
+  rssStreamed = maxRssKb()
 
   let t0 = getMonoTime()
-  var direct = 0
-  for _ in 0 ..< 20:
-    direct += checksum(memView(mf)) # zero-copy view over the mapping
-  let directMs = inMilliseconds(getMonoTime() - t0)
+  for _ in 0 ..< Passes:
+    sumView += checksum(memView(mf)) # zero-copy view over the mapping
+  let msView = inMilliseconds(getMonoTime() - t0)
+  rssView = maxRssKb()
 
+  # Stride the mapping in fixed windows through one reused pool.
+  var pool = initPool(byte, Chunk)
   let t1 = getMonoTime()
-  var pool = initPool(byte, mf.size) # one backing store for the whole demo
-  var copied = 0
-  for _ in 0 ..< 20:
-    withBorrow(pool, buf):
-      buf.copyFromMemFile(mf)       # single bulk copy into reused memory
-      copied += checksum(buf.toOpenArray())
-  let copiedMs = inMilliseconds(getMonoTime() - t1)
+  for _ in 0 ..< Passes:
+    for slice in memChunks(mf, Chunk):
+      withBorrow(pool, buf):
+        buf.copyFromSlice(slice)
+        sumChunked += checksum(buf.toOpenArray())
+  let msChunked = inMilliseconds(getMonoTime() - t1)
+  rssChunked = maxRssKb()
 
-  doAssert direct == copied, "both paths must agree"
-  GC_fullCollect()
+  doAssert sumView == sumChunked and sumChunked == sumStreamed
 
-  echo "file:    ", mf.size, " B x 20 passes"
-  echo "memView: sum=", direct, " time=", directMs, " ms (no copy)"
-  echo "pool:    sum=", copied, " time=", copiedMs, " ms (one backing store)"
-  echo "heap:    before=", heapBefore, " B after=", getOccupiedMem(),
-    " B (after = the 1 MiB pool itself, allocated once)"
-  echo "maxrss:  ", maxRssKb(), " KB"
+  echo "file:     ", mf.size, " B x ", Passes, " passes"
+  echo "streamed: sum=", sumStreamed, " time=", msStreamed,
+    " ms maxrss=", rssStreamed, " KB (no mapping, 10 MiB stack)"
+  echo "memView:  sum=", sumView, " time=", msView,
+    " ms maxrss=", rssView, " KB (mapping only)"
+  echo "chunked:  sum=", sumChunked, " time=", msChunked,
+    " ms maxrss=", rssChunked, " KB (mapping + 10 MiB pool)"
 finally:
   mf.close()
   removeFile(path)

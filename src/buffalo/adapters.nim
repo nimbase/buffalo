@@ -43,6 +43,18 @@ template ptrView*[T](p: ptr UncheckedArray[T], n: int): untyped =
   ## Zero-copy view over `n` elements at raw pointer `p`.
   toOpenArray(p, 0, n - 1)
 
+iterator memChunks*(mf: MemFile, chunkSize: int): MemSlice {.inline.} =
+  ## Fixed-size striding over a mapping for chunked reuse: pair with
+  ## `copyFromSlice` (copy into a small pool) or `sliceView` (zero-copy).
+  ## The last chunk may be shorter; an empty file yields nothing.
+  ## Complements the delimiter-based `memSlices` for binary data.
+  assert chunkSize > 0, "memChunks chunkSize must be positive"
+  var off = 0
+  while off < mf.size:
+    let n = min(chunkSize, mf.size - off)
+    yield MemSlice(data: cast[pointer](cast[int](mf.mem) +% off), size: n)
+    off += n
+
 # ---------------------------------------------------------------------------
 # Copy out (allocating escape hatch)
 # ---------------------------------------------------------------------------
@@ -216,6 +228,34 @@ proc copyFromMemFile*[T](b: var PooledBuffer[T], mf: MemFile) {.inline.} =
   if mf.size > 0:
     copyMem(addr b.data[0], mf.mem, mf.size)
   b.len = mf.size
+
+proc copyFromMemFile*[T; Cap: static int](
+    b: var StaticBuffer[T, Cap], mf: MemFile, offset, len: int
+) {.inline.} =
+  ## Bulk-copy `len` bytes at `offset` into a fixed buffer. Bounds-checked
+  ## on both the mapping and the capacity; the chunked-reuse primitive
+  ## behind `memChunks` loops (or use `copyFromSlice` per chunk).
+  static:
+    assert T is byte or T is char
+  if offset < 0 or len < 0 or offset > mf.size or len > mf.size - offset:
+    raise newException(RangeDefect, "copyFromMemFile range out of bounds")
+  if len > Cap:
+    raise newException(RangeDefect, "StaticBuffer copyFromMemFile overflow")
+  if len > 0:
+    copyMem(addr b.data[0], cast[pointer](cast[int](mf.mem) +% offset), len)
+  b.len = len
+
+proc copyFromMemFile*[T](
+    b: var PooledBuffer[T], mf: MemFile, offset, len: int
+) {.inline.} =
+  static:
+    assert T is byte or T is char
+  if offset < 0 or len < 0 or offset > mf.size or len > mf.size - offset:
+    raise newException(RangeDefect, "copyFromMemFile range out of bounds")
+  b.ensureCap(len)
+  if len > 0:
+    copyMem(addr b.data[0], cast[pointer](cast[int](mf.mem) +% offset), len)
+  b.len = len
 
 proc copyFromSlice*[T; Cap: static int](
     b: var StaticBuffer[T, Cap], ms: MemSlice

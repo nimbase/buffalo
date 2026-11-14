@@ -343,3 +343,61 @@ suite "views and memfiles":
         mf.close()
     finally:
       removeFile(path)
+
+suite "memfiles chunks and ranges":
+  test "memChunks strides fixed windows":
+    let dir = getTempDir()
+    let path = dir / "buffalo_chunks.bin"
+    var content = newString(10)
+    for i in 0 ..< 10:
+      content[i] = char(i)
+    writeFile(path, content)
+    try:
+      var mf = memfiles.open(path, fmRead)
+      try:
+        var sizes: seq[int] = @[]
+        var bytes: seq[byte] = @[]
+        for slice in memChunks(mf, 4):
+          sizes.add(slice.size)
+          for b in sliceView(slice):
+            bytes.add(b)
+        check sizes == @[4, 4, 2]
+        check bytes == cast[seq[byte]](content)
+        var single: seq[int] = @[]
+        for slice in memChunks(mf, 64):
+          single.add(slice.size)
+        check single == @[10]
+      finally:
+        mf.close()
+    finally:
+      removeFile(path)
+
+  test "copyFromMemFile offset and len":
+    let dir = getTempDir()
+    let path = dir / "buffalo_range.bin"
+    writeFile(path, "0123456789")
+    try:
+      var mf = memfiles.open(path, fmRead)
+      try:
+        var sb {.noinit.}: StaticBuffer[byte, 8]
+        sb.len = 0
+        sb.copyFromMemFile(mf, 2, 4)
+        check sb.len == 4
+        check sb.toString() == "2345"
+        sb.copyFromMemFile(mf, 0, 0)
+        check sb.len == 0
+        expect RangeDefect:
+          sb.copyFromMemFile(mf, 8, 4) # past end of mapping
+        expect RangeDefect:
+          sb.copyFromMemFile(mf, 0, 9) # past capacity
+        expect RangeDefect:
+          sb.copyFromMemFile(mf, -1, 2)
+        var p = initPool(byte, 2)
+        p.copyFromMemFile(mf, 5, 5)
+        check p.toString() == "56789"
+        expect RangeDefect:
+          p.copyFromMemFile(mf, 9, 2)
+      finally:
+        mf.close()
+    finally:
+      removeFile(path)

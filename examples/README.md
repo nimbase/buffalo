@@ -28,7 +28,7 @@ Binaries go to `/tmp` so the repo stays clean.
 | ---- | ------------- |
 | `static_scratch.nim` | `buffaloScope` + `StaticBuffer` stack scratch, `reuse` per line. Heap before == heap after. |
 | `pooled_hot_loop.nim` | Batching (`seq[seq[byte]]`, O(N) RSS) vs streaming (`initPool` + `withBorrow`, O(1)). Same checksum; retained heap and maxrss side by side. |
-| `memfiles_scan.nim` | `memView` zero-copy scan of a 1 MiB mapping vs one `copyFromMemFile` pool. Same checksum, flat heap. |
+| `memfiles_scan.nim` | Three-way 200 MiB scan with per-phase maxrss: streamed `FileStream` into 10 MiB stack (~12 MB), `memView` over the mapping (~210 MB), `memChunks` + `copyFromSlice` into a 10 MiB pool (~220 MB, no 2x copy). |
 | `buffer_ops.nim` | B ops: `setLen` (shrink/grow-zero-fill), `pop`, `reserve`, `shrinkToFit`, `maxCap`, `shrinkAfterSpike`, char strings. Prints cap at each step. |
 | `rss_benchmark.nim` | Naive (`newSeq` + bulk copy per iter) vs pooled (`copyFrom` into reused backing) at 256 B / 4 KB / 64 KB. Pool grows once from cap 8, then stays flat. |
 
