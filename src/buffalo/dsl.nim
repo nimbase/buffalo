@@ -364,7 +364,10 @@ macro withBorrow*(pool: var auto, bufName: untyped, body: untyped): untyped =
   ## the alias is resolved at compile time, so use costs nothing beyond
   ## direct field access. `pool` must be a plain variable (ident or
   ## field/index path without calls) so the alias cannot duplicate
-  ## side effects.
+  ## side effects. A `var` proc parameter qualifies: it arrives wrapped
+  ## in `nnkHiddenDeref` (the compiler's implicit deref), which denotes
+  ## the variable itself, so it is stripped before the check. This is
+  ## what lets scratch pools thread through `Impl` layers by parameter.
   if bufName.kind notin {nnkIdent, nnkSym}:
     error("buffalo: borrow name must be a plain identifier", bufName)
   let bname = $bufName
@@ -377,8 +380,16 @@ macro withBorrow*(pool: var auto, bufName: untyped, body: untyped): untyped =
         return true
     false
 
-  if pool.kind notin {nnkIdent, nnkSym, nnkDotExpr, nnkBracketExpr} or
-      hasCall(pool):
+  proc unwrapPoolVar(n: NimNode): NimNode =
+    if n.kind == nnkHiddenDeref and n.len == 1 and
+        n[0].kind in {nnkIdent, nnkSym}:
+      n[0]
+    else:
+      n
+
+  let thePool = unwrapPoolVar(pool)
+  if thePool.kind notin {nnkIdent, nnkSym, nnkDotExpr, nnkBracketExpr} or
+      hasCall(thePool):
     error(
       "buffalo: pool must be a plain variable (ident / field / index, no calls)",
       pool,
@@ -386,9 +397,9 @@ macro withBorrow*(pool: var auto, bufName: untyped, body: untyped): untyped =
 
   checkNoEscape(body, bname)
   result = quote do:
-    `pool`.clear()
+    `thePool`.clear()
     block:
-      template `bufName`: auto = `pool`
+      template `bufName`: auto = `thePool`
       `body`
 
 # ---------------------------------------------------------------------------

@@ -119,6 +119,31 @@ suite "withBorrow DSL":
     withBorrow(sb, b2):
       check b2.len == 0
 
+  test "borrows a var proc parameter pool":
+    # Threading a scratch pool through Impl layers by parameter: the
+    # `var` param arrives as nnkHiddenDeref (compiler-inserted), which
+    # denotes the variable itself and must be accepted.
+    proc fill(p: var PooledBuffer[byte], v: byte): int =
+      withBorrow(p, b):
+        b.add(v)
+      p.len
+    var pool = initPool(byte, 8)
+    check fill(pool, 7) == 1
+    check fill(pool, 8) == 1
+    check pool.len == 1
+
+  test "withBorrows over var proc parameter pools":
+    proc fill2(pa: var PooledBuffer[byte],
+        pb: var PooledBuffer[byte]): int =
+      withBorrows(pa, a, pb, b):
+        a.add(1)
+        b.add(2)
+      pa.len + pb.len
+    var pa = initPool(byte, 8)
+    var pb = initPool(byte, 8)
+    check fill2(pa, pb) == 2
+    check fill2(pa, pb) == 2
+
   test "sanctioned copy-out via toSeq":
     proc f(): seq[byte] =
       var pool = initPool(byte, 8)
